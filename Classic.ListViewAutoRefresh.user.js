@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name        SFDC Classic List View Auto Refresh
-// @namespace   com.esko.l1validation
+// @namespace   com.esko.salesforce.autorefresh
 // @version     1.0.0
-// @downloadURL https://raw.githubusercontent.com/<ORG>/<REPO>/main/Classic.ListViewAutoRefresh.user.js
-// @updateURL   https://raw.githubusercontent.com/<ORG>/<REPO>/main/Classic.ListViewAutoRefresh.user.js
+// @description  Auto refresh Salesforce Classic list views
+// @author       Esko Software Support
+// @downloadURL https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.ListViewAutoRefresh.user.js
+// @updateURL   https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.ListViewAutoRefresh.user.js
 // @match       https://esko.my.salesforce.com/*
 // @match       https://esko--accept.cs83.my.salesforce.com/*
 // @grant       none
