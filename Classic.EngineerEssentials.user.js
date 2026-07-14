@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SFDC Classic Engineer Essentials
 // @namespace    com.esko.salesforce.defaultforall
-// @version      1.0.0
-// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases
+// @version      1.0.1
+// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + Collapsed Status Synopsis
 // @author       Esko Software Support
 //
 // @downloadURL  https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.EngineerEssentials.user.js
@@ -33,8 +33,16 @@
     const DESCRIPTION_ID = '00N57000006DwrR';
     const WARNING_ID = 'desc-local-warning';
 
+    const STATUS_SYNOPSIS_HEADER = "Status Synopsis";
+    const SYNOPSIS_WRAPPER_CLASS = "status-synopsis-wrapper";
+    const SYNOPSIS_CONTENT_CLASS = "status-synopsis-content";
+    const SYNOPSIS_TOGGLE_CLASS = "status-synopsis-toggle";
+    const SYNOPSIS_EXPANDED_CLASS = "expanded";
+    const SYNOPSIS_PROCESSED_ATTR = "synopsisProcessed";
+
     const CHAT_STATUS_CHECK_INTERVAL_MS = 10000;
     const ACTION_REQUIRED_CHECK_INTERVAL_MS = 5000;
+    const STATUS_SYNOPSIS_CHECK_INTERVAL_MS = 5000;
     const DESCRIPTION_VALIDATION_CHECK_INTERVAL_MS = 1000;
     const OFFLINE_BEEP_INTERVAL_MS = 5000;
     const BEEP_DURATION_MS = 250;
@@ -130,6 +138,53 @@
                 vertical-align: middle;
                 animation: actionRequiredFlash 0.8s infinite;
                 cursor: pointer;
+            }
+
+            /* ---------------------------------------------------------
+               STATUS SYNOPSIS COLLAPSE / EXPAND
+            --------------------------------------------------------- */
+
+            .${SYNOPSIS_WRAPPER_CLASS} {
+                display: flex;
+                align-items: flex-start;
+                gap: 6px;
+                width: 100%;
+            }
+
+            .${SYNOPSIS_TOGGLE_CLASS} {
+                flex: 0 0 auto;
+                display: inline-block;
+                width: 14px;
+                line-height: 16px;
+                text-align: center;
+                cursor: pointer;
+                user-select: none;
+                color: #015ba7;
+                font-size: 11px;
+                margin-top: 1px;
+                transform: rotate(0deg);
+                transition: transform 0.15s ease-in-out;
+            }
+
+            .${SYNOPSIS_WRAPPER_CLASS}.${SYNOPSIS_EXPANDED_CLASS} .${SYNOPSIS_TOGGLE_CLASS} {
+                transform: rotate(90deg);
+            }
+
+            .${SYNOPSIS_CONTENT_CLASS} {
+                flex: 1 1 auto;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                display: -webkit-box;
+                -webkit-line-clamp: 1;
+                -webkit-box-orient: vertical;
+                white-space: normal;
+            }
+
+            .${SYNOPSIS_WRAPPER_CLASS}.${SYNOPSIS_EXPANDED_CLASS} .${SYNOPSIS_CONTENT_CLASS} {
+                display: block;
+                -webkit-line-clamp: unset;
+                overflow: visible;
             }
         `;
 
@@ -603,6 +658,84 @@
     }
 
     /********************************************************************
+     * STATUS SYNOPSIS COLLAPSE / EXPAND
+     ********************************************************************/
+
+    function collapseStatusSynopsisCell(cell) {
+
+        if (cell.dataset[SYNOPSIS_PROCESSED_ATTR] === 'true') {
+            return;
+        }
+
+        const originalHTML = cell.innerHTML;
+
+        cell.dataset[SYNOPSIS_PROCESSED_ATTR] = 'true';
+        cell.innerHTML = '';
+        cell.style.whiteSpace = 'normal';
+
+        const wrapper =
+            document.createElement('div');
+
+        wrapper.className = SYNOPSIS_WRAPPER_CLASS;
+
+        const toggle =
+            document.createElement('span');
+
+        toggle.className = SYNOPSIS_TOGGLE_CLASS;
+        toggle.textContent = '▶';
+        toggle.title = 'Expand / collapse Status Synopsis';
+
+        const content =
+            document.createElement('div');
+
+        content.className = SYNOPSIS_CONTENT_CLASS;
+        content.innerHTML = originalHTML;
+
+        toggle.addEventListener('click', function (e) {
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            wrapper.classList.toggle(
+                SYNOPSIS_EXPANDED_CLASS
+            );
+        });
+
+        wrapper.appendChild(toggle);
+        wrapper.appendChild(content);
+
+        cell.appendChild(wrapper);
+    }
+
+    function processStatusSynopsisRows() {
+
+        const synopsisKey =
+            getColumnKeyByHeaderTitle(
+                STATUS_SYNOPSIS_HEADER
+            );
+
+        if (!synopsisKey) {
+            return;
+        }
+
+        document
+            .querySelectorAll(".x-grid3-row")
+            .forEach(row => {
+
+                const synopsisCell =
+                    findCell(row, synopsisKey);
+
+                if (!synopsisCell) {
+                    return;
+                }
+
+                collapseStatusSynopsisCell(
+                    synopsisCell
+                );
+            });
+    }
+
+    /********************************************************************
      * DESCRIPTION_LOCAL VALIDATION BEFORE CLOSING CASE
      ********************************************************************/
 
@@ -743,6 +876,7 @@
 
     checkChatStatus();
     processActionRequiredRows();
+    processStatusSynopsisRows();
     initializeDescriptionValidation();
 
     setInterval(
@@ -753,6 +887,11 @@
     setInterval(
         processActionRequiredRows,
         ACTION_REQUIRED_CHECK_INTERVAL_MS
+    );
+
+    setInterval(
+        processStatusSynopsisRows,
+        STATUS_SYNOPSIS_CHECK_INTERVAL_MS
     );
 
     setInterval(
