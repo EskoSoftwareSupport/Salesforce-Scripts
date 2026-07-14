@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SFDC Classic Engineer Essentials
 // @namespace    com.esko.salesforce.defaultforall
-// @version      1.0.1
-// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + Collapsed Status Synopsis
+// @version      1.0.2
+// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases
 // @author       Esko Software Support
 //
 // @downloadURL  https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.EngineerEssentials.user.js
@@ -522,6 +522,88 @@
         );
     }
 
+    /********************************************************************
+     * STATUS SYNOPSIS COLLAPSE / EXPAND
+     ********************************************************************/
+
+    function collapseStatusSynopsisCell(cell) {
+
+        if (cell.dataset[SYNOPSIS_PROCESSED_ATTR] === 'true') {
+            return;
+        }
+
+        const originalHTML = cell.innerHTML;
+
+        cell.dataset[SYNOPSIS_PROCESSED_ATTR] = 'true';
+        cell.innerHTML = '';
+        cell.style.whiteSpace = 'normal';
+
+        const wrapper =
+            document.createElement('div');
+
+        wrapper.className = SYNOPSIS_WRAPPER_CLASS;
+
+        const toggle =
+            document.createElement('span');
+
+        toggle.className = SYNOPSIS_TOGGLE_CLASS;
+        toggle.textContent = '▶';
+        toggle.title = 'Expand / collapse Status Synopsis';
+
+        const content =
+            document.createElement('div');
+
+        content.className = SYNOPSIS_CONTENT_CLASS;
+        content.innerHTML = originalHTML;
+
+        toggle.addEventListener('click', function (e) {
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            wrapper.classList.toggle(
+                SYNOPSIS_EXPANDED_CLASS
+            );
+        });
+
+        wrapper.appendChild(toggle);
+        wrapper.appendChild(content);
+
+        cell.appendChild(wrapper);
+    }
+
+    function processStatusSynopsisRows() {
+
+        const synopsisKey =
+            getColumnKeyByHeaderTitle(
+                STATUS_SYNOPSIS_HEADER
+            );
+
+        if (!synopsisKey) {
+            return;
+        }
+
+        document
+            .querySelectorAll(".x-grid3-row")
+            .forEach(row => {
+
+                const synopsisCell =
+                    findCell(row, synopsisKey);
+
+                if (!synopsisCell) {
+                    return;
+                }
+
+                collapseStatusSynopsisCell(
+                    synopsisCell
+                );
+            });
+    }
+
+    /********************************************************************
+     * ACTION REQUIRED ICON (ROW PROCESSING)
+     ********************************************************************/
+
     function isActionRequiredChecked(actionCell) {
 
         const checkboxInput =
@@ -654,84 +736,6 @@
                         actionCell
                     );
                 }
-            });
-    }
-
-    /********************************************************************
-     * STATUS SYNOPSIS COLLAPSE / EXPAND
-     ********************************************************************/
-
-    function collapseStatusSynopsisCell(cell) {
-
-        if (cell.dataset[SYNOPSIS_PROCESSED_ATTR] === 'true') {
-            return;
-        }
-
-        const originalHTML = cell.innerHTML;
-
-        cell.dataset[SYNOPSIS_PROCESSED_ATTR] = 'true';
-        cell.innerHTML = '';
-        cell.style.whiteSpace = 'normal';
-
-        const wrapper =
-            document.createElement('div');
-
-        wrapper.className = SYNOPSIS_WRAPPER_CLASS;
-
-        const toggle =
-            document.createElement('span');
-
-        toggle.className = SYNOPSIS_TOGGLE_CLASS;
-        toggle.textContent = '▶';
-        toggle.title = 'Expand / collapse Status Synopsis';
-
-        const content =
-            document.createElement('div');
-
-        content.className = SYNOPSIS_CONTENT_CLASS;
-        content.innerHTML = originalHTML;
-
-        toggle.addEventListener('click', function (e) {
-
-            e.preventDefault();
-            e.stopPropagation();
-
-            wrapper.classList.toggle(
-                SYNOPSIS_EXPANDED_CLASS
-            );
-        });
-
-        wrapper.appendChild(toggle);
-        wrapper.appendChild(content);
-
-        cell.appendChild(wrapper);
-    }
-
-    function processStatusSynopsisRows() {
-
-        const synopsisKey =
-            getColumnKeyByHeaderTitle(
-                STATUS_SYNOPSIS_HEADER
-            );
-
-        if (!synopsisKey) {
-            return;
-        }
-
-        document
-            .querySelectorAll(".x-grid3-row")
-            .forEach(row => {
-
-                const synopsisCell =
-                    findCell(row, synopsisKey);
-
-                if (!synopsisCell) {
-                    return;
-                }
-
-                collapseStatusSynopsisCell(
-                    synopsisCell
-                );
             });
     }
 
@@ -874,10 +878,15 @@
      * START
      ********************************************************************/
 
+    processStatusSynopsisRows();
     checkChatStatus();
     processActionRequiredRows();
-    processStatusSynopsisRows();
     initializeDescriptionValidation();
+
+    setInterval(
+        processStatusSynopsisRows,
+        STATUS_SYNOPSIS_CHECK_INTERVAL_MS
+    );
 
     setInterval(
         checkChatStatus,
@@ -887,11 +896,6 @@
     setInterval(
         processActionRequiredRows,
         ACTION_REQUIRED_CHECK_INTERVAL_MS
-    );
-
-    setInterval(
-        processStatusSynopsisRows,
-        STATUS_SYNOPSIS_CHECK_INTERVAL_MS
     );
 
     setInterval(
