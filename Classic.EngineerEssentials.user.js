@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SFDC Classic Engineer Essentials
 // @namespace    com.esko.salesforce.defaultforall
-// @version      1.3.0
-// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + floating "My New Cases" / "Action Required" count bubbles with hover tooltips + Problem Urgency highlight panel color and badge + Problem Urgency list-view row coloring
+// @version      1.4.0
+// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + Billable/Problem record type advisory banner + floating "My New Cases" / "Action Required" count bubbles with hover tooltips + Problem Urgency highlight panel color and badge + Problem Urgency list-view row coloring
 // @author       Esko Software Support
 //
 // @downloadURL  https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.EngineerEssentials.user.js
@@ -63,6 +63,22 @@
     const STATUS_ID = 'cas7';
     const DESCRIPTION_ID = '00N57000006DwrR';
     const WARNING_ID = 'desc-local-warning';
+
+    // Billable picklist: bare field id, same convention as STATUS_ID/
+    // DESCRIPTION_ID above (Salesforce swaps each field's read-only
+    // "<id>_ileinner" div for a bare-id form input while the page is in
+    // inline edit mode). Case Record Type is never inline-editable, so it
+    // always stays as the read-only "RecordType_ileinner" div, with or
+    // without edit mode active.
+    const BILLABLE_ID = '00ND0000006DaqD';
+    // Case Record Type has no stable id in edit mode - it's rendered as
+    // plain, unlabelled text ("<td class="dataCol col02">Problem</td>"),
+    // so it must be located by its column label ("Case Record Type")
+    // instead of getElementById.
+    const RECORD_TYPE_LABEL_TEXT = 'Case Record Type';
+    const BILLABLE_WARNING_ID = 'billable-warning';
+    const BILLABLE_WARNING_TEXT =
+        'This problem case is marked as billable are you sure its billable? ';
 
     const STATUS_SYNOPSIS_HEADER = "Status Synopsis";
     const SYNOPSIS_WRAPPER_CLASS = "status-synopsis-wrapper";
@@ -876,6 +892,33 @@
      * DESCRIPTION_LOCAL VALIDATION BEFORE CLOSING CASE
      ********************************************************************/
 
+    function getRecordTypeText() {
+        // Find the labelCol cell whose text matches "Case Record Type",
+        // then read the very next cell (its value). This mirrors the
+        // labelCol/dataCol pattern used throughout the classic page
+        // layout, since Record Type has no stable id of its own here.
+        const labelCells =
+            document.querySelectorAll('td.labelCol, th.labelCol');
+
+        for (const cell of labelCells) {
+
+            const labelText =
+                cleanText(cell.textContent);
+
+            if (labelText === RECORD_TYPE_LABEL_TEXT) {
+
+                const valueCell =
+                    cell.nextElementSibling;
+
+                if (valueCell) {
+                    return cleanText(valueCell.textContent);
+                }
+            }
+        }
+
+        return null;
+    }
+
     function validateCase() {
 
         const statusField =
@@ -963,6 +1006,77 @@
                 btn.disabled = false;
             });
         }
+
+        /**************************************************************
+         * BILLABLE / PROBLEM RECORD TYPE ADVISORY BANNER
+         *
+         * Advisory only - unlike the Description_local check above,
+         * this does not block Save. It just flags a combination worth
+         * double-checking: closing a Problem-type case while Billable
+         * is set to Yes.
+         **************************************************************/
+
+        const billableField =
+            document.getElementById(BILLABLE_ID);
+
+        const isBillableYes =
+            !!billableField &&
+            cleanText(billableField.value).toLowerCase() === 'yes';
+
+        const recordTypeText =
+            getRecordTypeText();
+
+        const isProblemRecordType =
+            !!recordTypeText &&
+            recordTypeText.toLowerCase().startsWith('problem');
+
+        let billableWarning =
+            document.getElementById(BILLABLE_WARNING_ID);
+
+        if (!billableWarning) {
+
+            billableWarning =
+                document.createElement('div');
+
+            billableWarning.id = BILLABLE_WARNING_ID;
+
+            billableWarning.style.background = '#fff3cd';
+            billableWarning.style.border = '2px solid #ffb400';
+            billableWarning.style.color = '#7a5b00';
+            billableWarning.style.padding = '10px';
+            billableWarning.style.marginBottom = '8px';
+            billableWarning.style.fontWeight = 'bold';
+            billableWarning.style.fontSize = '13px';
+            billableWarning.style.display = 'none';
+            billableWarning.style.borderRadius = '4px';
+
+            statusField.parentNode.insertBefore(
+                billableWarning,
+                statusField
+            );
+        }
+
+        if (isClosed && isBillableYes && isProblemRecordType) {
+
+            billableWarning.innerHTML =
+                '⚠ ' + BILLABLE_WARNING_TEXT;
+
+            billableWarning.style.display = 'block';
+
+            if (billableField) {
+                billableField.style.border = '2px solid #ffb400';
+                billableField.style.backgroundColor = '#fff3cd';
+            }
+
+        } else {
+
+            billableWarning.style.display = 'none';
+
+            if (billableField) {
+                billableField.style.border = '';
+                billableField.style.backgroundColor = '';
+            }
+        }
     }
 
     function initializeDescriptionValidation() {
@@ -998,6 +1112,24 @@
             );
 
             descriptionField.addEventListener(
+                'change',
+                validateCase
+            );
+        }
+
+        // Hooked independently from the block above: the Billable
+        // picklist is a separate inline-edit field that may enter/exit
+        // the DOM at a different time than Status/Description_local
+        // (e.g. it's further down the page layout), so it gets its own
+        // "already hooked" flag rather than sharing statusField's.
+        const billableField =
+            document.getElementById(BILLABLE_ID);
+
+        if (billableField && !billableField.dataset.defaultForAllHooked) {
+
+            billableField.dataset.defaultForAllHooked = 'true';
+
+            billableField.addEventListener(
                 'change',
                 validateCase
             );
