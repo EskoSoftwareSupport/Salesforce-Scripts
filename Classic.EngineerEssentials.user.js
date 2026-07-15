@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SFDC Classic Engineer Essentials
 // @namespace    com.esko.salesforce.defaultforall
-// @version      1.2.0
-// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + floating "My New Cases" / "Action Required" count bubbles with hover tooltips + Problem Urgency highlight panel color and badge
+// @version      1.3.0
+// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + floating "My New Cases" / "Action Required" count bubbles with hover tooltips + Problem Urgency highlight panel color and badge + Problem Urgency list-view row coloring
 // @author       Esko Software Support
 //
 // @downloadURL  https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.EngineerEssentials.user.js
@@ -71,8 +71,19 @@
     const SYNOPSIS_EXPANDED_CLASS = "expanded";
     const SYNOPSIS_PROCESSED_ATTR = "synopsisProcessed";
 
+    const PROBLEM_URGENCY_HEADER = "Problem urgency";
+    const PROBLEM_URGENCY_ROW_ATTR = "urgencyRowColored";
+    // Same palette used for the case-detail highlight panel (Part 3).
+    const PROBLEM_URGENCY_ROW_COLORS = {
+        down: "#f2b1b1",
+        critical: "#fae1a5",
+        normal: "#b5d8f7",
+        low: "#e0dede"
+    };
+
     const CHAT_STATUS_CHECK_INTERVAL_MS = 10000;
     const ACTION_REQUIRED_CHECK_INTERVAL_MS = 5000;
+    const PROBLEM_URGENCY_ROW_CHECK_INTERVAL_MS = 5000;
     const STATUS_SYNOPSIS_CHECK_INTERVAL_MS = 5000;
     const DESCRIPTION_VALIDATION_CHECK_INTERVAL_MS = 1000;
     const OFFLINE_BEEP_INTERVAL_MS = 5000;
@@ -543,6 +554,53 @@
         return null;
     }
 
+    function getColumnKeyByHeaderTitleCI(headerTitle) {
+        // Same lookup as getColumnKeyByHeaderTitle, but case-insensitive.
+        // Salesforce list-view column headers take the field's configured
+        // label, which may not match the exact casing used elsewhere
+        // (e.g. the case detail page shows "Problem urgency").
+
+        const target = headerTitle.toLowerCase();
+
+        const headers =
+            document.querySelectorAll(
+                "div.x-grid3-hd-inner"
+            );
+
+        for (const header of headers) {
+
+            const title =
+                cleanText(header.getAttribute("title")).toLowerCase();
+
+            const text =
+                cleanText(header.textContent).toLowerCase();
+
+            if (
+                title === target ||
+                text.includes(target)
+            ) {
+
+                const classes =
+                    header.className.split(/\s+/);
+
+                for (const cls of classes) {
+
+                    if (
+                        cls.startsWith("x-grid3-hd-") &&
+                        cls !== "x-grid3-hd-inner"
+                    ) {
+                        return cls.replace(
+                            "x-grid3-hd-",
+                            ""
+                        );
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
     function findCell(row, key) {
 
         return (
@@ -747,6 +805,74 @@
     }
 
     /********************************************************************
+     * PROBLEM URGENCY ROW COLOR (LIST VIEWS)
+     ********************************************************************/
+
+    function applyProblemUrgencyRowColor(row, bg) {
+
+        row.style.setProperty("background-color", bg, "important");
+        row.dataset[PROBLEM_URGENCY_ROW_ATTR] = "true";
+
+        // The Ext JS grid renders each cell as its own <td>/div with its
+        // own background (e.g. alternating-row striping), which can mask
+        // a color set only on the row wrapper. Paint every cell too so
+        // the whole row reads as one solid color.
+        row.querySelectorAll("td, .x-grid3-cell-inner").forEach(cell => {
+            cell.style.setProperty("background-color", bg, "important");
+        });
+    }
+
+    function clearProblemUrgencyRowColor(row) {
+
+        if (row.dataset[PROBLEM_URGENCY_ROW_ATTR] !== "true") {
+            return;
+        }
+
+        delete row.dataset[PROBLEM_URGENCY_ROW_ATTR];
+        row.style.removeProperty("background-color");
+
+        row.querySelectorAll("td, .x-grid3-cell-inner").forEach(cell => {
+            cell.style.removeProperty("background-color");
+        });
+    }
+
+    function processProblemUrgencyRows() {
+
+        const urgencyKey =
+            getColumnKeyByHeaderTitleCI(
+                PROBLEM_URGENCY_HEADER
+            );
+
+        if (!urgencyKey) {
+            return;
+        }
+
+        document
+            .querySelectorAll(".x-grid3-row")
+            .forEach(row => {
+
+                const urgencyCell =
+                    findCell(row, urgencyKey);
+
+                if (!urgencyCell) {
+                    return;
+                }
+
+                const urgencyValue =
+                    cleanText(urgencyCell.textContent).toLowerCase();
+
+                const bg =
+                    PROBLEM_URGENCY_ROW_COLORS[urgencyValue];
+
+                if (bg) {
+                    applyProblemUrgencyRowColor(row, bg);
+                } else {
+                    clearProblemUrgencyRowColor(row);
+                }
+            });
+    }
+
+    /********************************************************************
      * DESCRIPTION_LOCAL VALIDATION BEFORE CLOSING CASE
      ********************************************************************/
 
@@ -888,6 +1014,7 @@
     processStatusSynopsisRows();
     checkChatStatus();
     processActionRequiredRows();
+    processProblemUrgencyRows();
     initializeDescriptionValidation();
 
     setInterval(
@@ -903,6 +1030,11 @@
     setInterval(
         processActionRequiredRows,
         ACTION_REQUIRED_CHECK_INTERVAL_MS
+    );
+
+    setInterval(
+        processProblemUrgencyRows,
+        PROBLEM_URGENCY_ROW_CHECK_INTERVAL_MS
     );
 
     setInterval(
