@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SFDC Classic Engineer Essentials
 // @namespace    com.esko.salesforce.defaultforall
-// @version      1.1.1
-// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + floating "My New Cases" / "Action Required" count bubbles with hover tooltips
+// @version      1.2.0
+// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + floating "My New Cases" / "Action Required" count bubbles with hover tooltips + Problem Urgency highlight panel color and badge
 // @author       Esko Software Support
 //
 // @downloadURL  https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.EngineerEssentials.user.js
@@ -1570,5 +1570,278 @@
       document.addEventListener('DOMContentLoaded', start, { once: true });
     }
   }
+
+})();
+
+/*###################################################################
+ # PART 3 — PROBLEM URGENCY HIGHLIGHT PANEL COLOR + BADGE
+ #
+ # Tints the case highlight panel (.efhpContainer) and shows a
+ # "<Urgency> Case" badge next to "Customer", based on the Problem
+ # Urgency picklist field (Down / Critical / Normal / Low). Runs as
+ # its own top-level IIFE (rather than nested in Part 1/2's IIFE)
+ # since it drives its own recursive same-origin frame walk and top
+ # frame gating, independent of Part 1/2's logic.
+ ###################################################################*/
+
+(function () {
+    'use strict';
+
+    const DEBUG = true;
+
+    const BADGE_BASE_CLASS = 'ue-case-badge';
+
+    // One entry per Problem Urgency picklist value we care about.
+    // panelBg: soft tint applied to the whole highlight panel (.efhpContainer).
+    // badgeBg/badgeColor/badgeLabel: bright badge shown next to "Customer".
+    // "Salesforce Blue" here is the Lightning Design System brand blue (#0070D2).
+    const URGENCY_CONFIG = {
+        down:     { panelBg: '#f2b1b1', badgeClass: 'ue-badge-down',     badgeBg: '#e00000', badgeColor: '#ffffff', badgeLabel: 'Down Case' },
+        critical: { panelBg: '#fae1a5', badgeClass: 'ue-badge-critical', badgeBg: '#ffb400', badgeColor: '#000000', badgeLabel: 'Critical Case' },
+        normal:   { panelBg: '#b5d8f7', badgeClass: 'ue-badge-normal',   badgeBg: '#0070d2', badgeColor: '#ffffff', badgeLabel: 'Normal Case' },
+        low:      { panelBg: '#e0dede', badgeClass: 'ue-badge-low',      badgeBg: '#9e9e9e', badgeColor: '#000000', badgeLabel: 'Low Case' }
+    };
+
+    // The Problem Urgency custom field's permanent internal ID in this org.
+    // Salesforce renders its inline-edit value as <div id="00ND0000006Dar9_ileinner">Down</div>
+    const PROBLEM_URGENCY_FIELD_ID = '00ND0000006Dar9';
+
+    function log(...args) {
+        if (DEBUG) console.log('[UrgencyBadge]', window.location.href, ...args);
+    }
+
+    // Only the top-most frame drives the logic. It recursively walks into
+    // same-origin nested iframes (console apps nest several apex pages in
+    // iframes) to find the Problem Urgency field and the Customer row,
+    // wherever each happens to live.
+    if (window !== window.top) {
+        return;
+    }
+
+    log('top frame active, watching for case view');
+
+    // Inject badge styling into a given document if not already present there.
+    // Each iframe is a separate document with its own style scope.
+    const styledDocs = new WeakSet();
+    function ensureStyleInjected(doc) {
+        if (styledDocs.has(doc)) return;
+        styledDocs.add(doc);
+        try {
+            const variantRules = Object.values(URGENCY_CONFIG).map((cfg) => `
+                .${cfg.badgeClass} {
+                    background-color: ${cfg.badgeBg} !important;
+                    color: ${cfg.badgeColor} !important;
+                }
+            `).join('\n');
+
+            const style = doc.createElement('style');
+            style.textContent = `
+                .${BADGE_BASE_CLASS} {
+                    display: inline-block;
+                    font-weight: bold;
+                    font-size: 11px;
+                    line-height: 1;
+                    padding: 3px 8px;
+                    border-radius: 3px;
+                    margin-left: 8px;
+                    vertical-align: middle;
+                }
+                ${variantRules}
+            `;
+            (doc.head || doc.documentElement).appendChild(style);
+        } catch (e) {
+            log('failed to inject style into a document', e);
+        }
+    }
+
+    // Recursively collect all reachable documents (top + same-origin nested iframes)
+    function collectDocuments(doc, out) {
+        out.push(doc);
+        let iframes;
+        try {
+            iframes = doc.querySelectorAll('iframe');
+        } catch (e) {
+            return;
+        }
+        iframes.forEach((frame) => {
+            try {
+                const innerDoc = frame.contentDocument;
+                if (innerDoc) {
+                    collectDocuments(innerDoc, out);
+                }
+            } catch (e) {
+                // Cross-origin iframe (e.g. *.vf.force.com) - can't access, skip it.
+            }
+        });
+    }
+
+    // Extract a Salesforce Case ID (15 or 18 char, starts with "500") from a URL.
+    function extractCaseId(url) {
+        if (!url) return null;
+        const match = url.match(/\b500[a-zA-Z0-9]{12,15}\b/);
+        return match ? match[0].substring(0, 15) : null; // normalize to 15-char form
+    }
+
+    // Walk the frame tree, tracking the "current" case ID as we descend
+    // (inherited from the nearest ancestor frame whose URL contains one).
+    // Every Problem Urgency field found, and every frame that contains a
+    // .efhpContainer element (the highlight panel - the top banner with
+    // Customer / Case Title / Description), gets tagged with that case ID.
+    // Within that panel we also grab the "Customer" label for the badge.
+    // This way we only ever color/badge the panel that belongs to the case
+    // whose urgency we actually read - even when Console has several case
+    // tabs open at once in separate parallel iframe trees.
+    function walk(doc, inheritedCaseId, urgencyByCase, workAreaByCase) {
+        let caseId = inheritedCaseId;
+        try {
+            const found = extractCaseId(doc.location.href);
+            if (found) caseId = found;
+        } catch (e) {
+            // ignore
+        }
+
+        try {
+            const urgencyEl = doc.getElementById(PROBLEM_URGENCY_FIELD_ID + '_ileinner');
+            if (urgencyEl && caseId) {
+                const val = urgencyEl.textContent.replace(/\u00A0/g, ' ').trim();
+                urgencyByCase[caseId] = val;
+                log('case', caseId, 'urgency =', JSON.stringify(val));
+            }
+        } catch (e) { /* ignore */ }
+
+        try {
+            const containerEl = doc.querySelector('.efhpContainer');
+            if (containerEl && caseId) {
+                const labelEl = containerEl.querySelector('.efhpLabel[title="Customer"]');
+                (workAreaByCase[caseId] = workAreaByCase[caseId] || []).push({
+                    containerEl: containerEl,
+                    labelEl: labelEl
+                });
+            }
+        } catch (e) { /* ignore */ }
+
+        let iframes;
+        try {
+            iframes = doc.querySelectorAll('iframe');
+        } catch (e) {
+            return;
+        }
+        iframes.forEach((frame) => {
+            try {
+                const innerDoc = frame.contentDocument;
+                if (innerDoc) {
+                    walk(innerDoc, caseId, urgencyByCase, workAreaByCase);
+                }
+            } catch (e) {
+                // Cross-origin iframe - skip.
+            }
+        });
+    }
+
+    const COLOR_ATTR = 'data-urgency-colored';
+
+    function applyPanelColor(containerEl, config) {
+        try {
+            containerEl.style.setProperty('background-color', config.panelBg, 'important');
+            containerEl.setAttribute(COLOR_ATTR, 'true');
+        } catch (e) {
+            log('failed to color a panel element', e);
+        }
+    }
+
+    function clearPanelColor(containerEl) {
+        try {
+            if (containerEl.getAttribute(COLOR_ATTR) === 'true') {
+                containerEl.style.removeProperty('background-color');
+                containerEl.removeAttribute(COLOR_ATTR);
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    function applyBadge(labelEl, config) {
+        if (!labelEl) return;
+        const doc = labelEl.ownerDocument;
+        ensureStyleInjected(doc);
+
+        let badge = labelEl.querySelector('.' + BADGE_BASE_CLASS);
+        if (!badge) {
+            badge = doc.createElement('span');
+            badge.className = BADGE_BASE_CLASS;
+            labelEl.appendChild(badge);
+        }
+        badge.className = BADGE_BASE_CLASS + ' ' + config.badgeClass;
+        badge.textContent = config.badgeLabel;
+    }
+
+    function removeBadge(labelEl) {
+        if (!labelEl) return;
+        const existing = labelEl.querySelector('.' + BADGE_BASE_CLASS);
+        if (existing) existing.remove();
+    }
+
+    function checkAndApply() {
+        const urgencyByCase = {};
+        const workAreaByCase = {};
+        walk(document, null, urgencyByCase, workAreaByCase);
+
+        const caseIds = Object.keys(workAreaByCase);
+        if (caseIds.length === 0) {
+            log('no highlight panel found in any reachable frame yet');
+        }
+
+        caseIds.forEach((caseId) => {
+            const urgency = urgencyByCase[caseId];
+            const key = urgency ? urgency.trim().toLowerCase() : null;
+            const config = key ? URGENCY_CONFIG[key] : null;
+
+            workAreaByCase[caseId].forEach(({ containerEl, labelEl }) => {
+                if (config) {
+                    applyPanelColor(containerEl, config);
+                    applyBadge(labelEl, config);
+                } else {
+                    clearPanelColor(containerEl);
+                    removeBadge(labelEl);
+                }
+            });
+        });
+    }
+
+    let debounceTimer = null;
+    function scheduleCheck() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(checkAndApply, 400);
+    }
+
+    scheduleCheck();
+
+    // Watch the top document for changes (new tabs/case switches load new
+    // iframes into the DOM). We also attach observers to nested same-origin
+    // documents as they're discovered, since console apps swap iframe
+    // contents in place without necessarily re-triggering the top observer.
+    const observedDocs = new WeakSet();
+    function watchDocument(doc) {
+        if (observedDocs.has(doc)) return;
+        observedDocs.add(doc);
+        try {
+            const obs = new MutationObserver(scheduleCheck);
+            obs.observe(doc.body || doc.documentElement, { childList: true, subtree: true });
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function watchAllReachableDocuments() {
+        const docs = [];
+        collectDocuments(document, docs);
+        docs.forEach(watchDocument);
+    }
+
+    watchAllReachableDocuments();
+    // Re-scan periodically for newly created iframes (console tab switches),
+    // since a brand-new iframe won't be covered by existing observers.
+    setInterval(() => {
+        watchAllReachableDocuments();
+        scheduleCheck();
+    }, 2000);
 
 })();
