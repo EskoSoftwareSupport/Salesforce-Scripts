@@ -5,8 +5,8 @@
 // @description  SLA countdown timer, milestone breach highlighting and FIRST/SECOND/NIGHT shift indicators for Salesforce Classic Level 1 Validation queues and dispatching assistance
 // @author       Esko Software Support
 //
-// @downloadURL  https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.ValidationQueue.And.Dispatching.user.js
-// @updateURL    https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.ValidationQueue.And.Dispatching.user.js
+// @downloadURL  https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.ValidationQueueAndDispatching.user.js
+// @updateURL    https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.ValidationQueueAndDispatching.user.js
 //
 // @match        https://esko.my.salesforce.com/*
 // @match        https://esko--accept.cs83.my.salesforce.com/*
