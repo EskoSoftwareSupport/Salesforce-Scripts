@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         SFDC Classic Resolution Time Left Calculator
+// @name         04 SFDC Classic Resolution Time Left Calculator
 // @namespace    com.esko.salesforce.resolutiontimeleftcalculator
 // @version      1.0.0
 // @description  Adds a "Calculate Resolution Time Left" button next to the case feed toggle that runs the ResolutionTime-DonotDelete report for the current case and shows the results
