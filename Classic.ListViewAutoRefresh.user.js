@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name        SFDC Classic List View Auto Refresh
+// @name        02 SFDC Classic List View Auto Refresh
 // @namespace   com.esko.salesforce.autorefresh
 // @version     1.0.0
 // @description  Auto refresh Salesforce Classic list views
