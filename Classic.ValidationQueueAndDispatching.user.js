@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         SFDC Classic - Level1 Validation Queue And dispatching
+// @name         01 SFDC Classic Validation Queue And dispatching
 // @namespace    com.esko.l1validation.timer.highlight.dispatching
 // @version      1.0.0
 // @description  SLA countdown timer, milestone breach highlighting and FIRST/SECOND/NIGHT shift indicators for Salesforce Classic Level 1 Validation queues and dispatching assistance
