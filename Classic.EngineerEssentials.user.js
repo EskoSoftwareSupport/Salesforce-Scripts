@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         SFDC Classic Engineer Essentials
+// @name         03 SFDC Classic Engineer Essentials
 // @namespace    com.esko.salesforce.defaultforall
 // @version      1.5.0
 // @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + Billable/Problem record type advisory banner + floating "My New Cases" / "Action Required" count bubbles with hover tooltips + Problem Urgency highlight panel color and badge + Problem Urgency list-view row coloring + Click-to-Call phone icons (dials via Microsoft Teams)
