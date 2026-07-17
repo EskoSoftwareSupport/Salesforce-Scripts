@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SFDC Classic Engineer Essentials
 // @namespace    com.esko.salesforce.defaultforall
-// @version      1.4.0
-// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + Billable/Problem record type advisory banner + floating "My New Cases" / "Action Required" count bubbles with hover tooltips + Problem Urgency highlight panel color and badge + Problem Urgency list-view row coloring
+// @version      1.5.0
+// @description  Customer Chat Monitor with beep alert + Action Required Alert Icon + Description_local validation before closing cases + Billable/Problem record type advisory banner + floating "My New Cases" / "Action Required" count bubbles with hover tooltips + Problem Urgency highlight panel color and badge + Problem Urgency list-view row coloring + Click-to-Call phone icons (dials via Microsoft Teams)
 // @author       Esko Software Support
 //
 // @downloadURL  https://raw.githubusercontent.com/EskoSoftwareSupport/Salesforce-Scripts/main/Classic.EngineerEssentials.user.js
@@ -13,6 +13,7 @@
 // @match        https://*.my.salesforce.com/*
 // @match        https://*.salesforce.com/*
 // @match        https://*.force.com/*
+// @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTYuNjIgMTAuNzljMS40NCAyLjgzIDMuNzYgNS4xNCA2LjU5IDYuNTlsMi4yLTIuMmMuMjctLjI3LjY3LS4zNiAxLjAyLS4yNCAxLjEyLjM3IDIuMzMuNTcgMy41Ny41N2E5NiAwIDAgMSAxIDF2My41YzAgLjU1LS40NSAxLTEgMUMxMC4wNyAyMSAzIDEzLjkzIDMgNS41YzAtLjU1LjQ1LTEgMS0xSDcuNWMuNTUgMCAxIC40NSAxIDEgMCAxLjI1LjIgMi40Ni41NyAzLjU3LjExLjM1LjAzLjc1LS4yNCAxLjAybC0yLjIgMi4yeiIgZmlsbD0iIzQ2NGVmMSIvPjwvc3ZnPg==
 // @grant        none
 // ==/UserScript==
 
@@ -2108,4 +2109,625 @@
         scheduleCheck();
     }, 2000);
 
+})();
+
+
+/*###################################################################
+ # PART 4 — CLICK-TO-CALL (MICROSOFT TEAMS)
+ #
+ # Merged in from "Salesforce Classic Click-to-Call (Microsoft Teams)"
+ # (standalone script, formerly its own .user.js). Kept as its own
+ # self-contained IIFE, appended after Parts 1-3, so it runs
+ # independently of — and after — everything above:
+ #   - It has its own top-level "use strict" scope, so none of its
+ #     identifiers (CONFIG, STYLE, etc.) can collide with Parts 1-3.
+ #   - It deliberately does NOT go through the LIGHTNING GUARD above:
+ #     the original script targeted Classic pages *and* embedded
+ #     Visualforce/Lightning Console panels, so gating it behind the
+ #     Classic-only guard would silently disable it where it used to
+ #     work. If Click-to-Call should also stop running in Lightning,
+ #     add the same isLightningExperience check inside this IIFE.
+ ###################################################################*/
+
+(function () {
+  'use strict';
+
+  /* ----------------------------------------------------------------
+   * CONFIG
+   * ---------------------------------------------------------------- */
+  const CONFIG = {
+    // Default country code to prepend if the number looks local (no + / 00 prefix).
+    // Set to '' if you don't want auto-prefixing.
+    defaultCountryCode: '+1',
+    iconTitle: 'Call via Microsoft Teams',
+    scanIntervalMs: 800, // periodic re-scan, cheap safety net alongside MutationObserver
+    // Set true temporarily to console.log what's being found, and render
+    // the icon in a way that can't be hidden by clipping/positioning, so
+    // we can tell "not detected" apart from "detected but invisible".
+    DEBUG: false,
+  };
+
+  const PROCESSED_ATTR = 'data-sftc-processed';
+  const ICON_CLASS = 'sftc-call-icon';
+
+  /* ----------------------------------------------------------------
+   * STYLES
+   * ---------------------------------------------------------------- */
+  const style = document.createElement('style');
+  style.textContent = `
+    .${ICON_CLASS} {
+      position: absolute;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+      opacity: 0.85;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      white-space: nowrap;
+      z-index: 2147483000;
+    }
+    .${ICON_CLASS}:hover {
+      opacity: 1;
+      transform: scale(1.2);
+    }
+    .${ICON_CLASS}.sftc-debug {
+      position: absolute;
+      background: #ff0000;
+      color: #ffffff;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: bold;
+      font-size: 13px;
+      opacity: 1;
+      box-shadow: 0 0 0 2px #000;
+    }
+
+    .${ICON_CLASS}.sftc-inline-icon {
+      position: static;
+      display: inline-flex;
+      vertical-align: middle;
+      margin-left: 4px;
+    }
+    .sftc-sig-number {
+      /* marker wrapper around a matched signature phone number; no visual styling needed */
+    }
+
+    #sftc-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      z-index: 2147483000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    #sftc-modal {
+      background: #ffffff;
+      border-radius: 10px;
+      width: 340px;
+      max-width: 90vw;
+      padding: 20px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    }
+    #sftc-modal h3 {
+      margin: 0 0 12px 0;
+      font-size: 16px;
+      color: #16325c;
+    }
+    #sftc-modal label {
+      display: block;
+      font-size: 12px;
+      color: #54698d;
+      margin-bottom: 4px;
+    }
+    #sftc-number-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      font-size: 14px;
+      border: 1px solid #c9c9c9;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+    #sftc-number-input:focus {
+      outline: none;
+      border-color: #0176d3;
+      box-shadow: 0 0 0 2px rgba(1,118,211,0.2);
+    }
+    #sftc-btn-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    #sftc-btn-row button {
+      padding: 8px 16px;
+      font-size: 13px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    #sftc-cancel-btn {
+      background: #ffffff;
+      border-color: #c9c9c9;
+      color: #16325c;
+    }
+    #sftc-cancel-btn:hover {
+      background: #f3f3f3;
+    }
+    #sftc-call-btn {
+      background: #0176d3;
+      color: #ffffff;
+    }
+    #sftc-call-btn:hover {
+      background: #014f96;
+    }
+    #sftc-error {
+      color: #c23934;
+      font-size: 12px;
+      margin: -10px 0 12px 0;
+      display: none;
+    }
+  `;
+  document.head.appendChild(style);
+
+  const PHONE_ICON_GLYPH = '📞';
+
+  /* ----------------------------------------------------------------
+   * HELPERS
+   * ---------------------------------------------------------------- */
+
+  // Basic phone-number *shape* sniff: digits, spaces, dashes, parens, leading +
+  const PHONE_REGEX = /^\+?[0-9()\-.\s]{7,20}$/;
+
+  // Labels we treat as "this cell is a phone number". Deliberately excludes
+  // "Fax" — you don't dial a fax line via Teams. Add/remove as needed for
+  // custom fields in your org (e.g. "Assistant Phone", "Emergency Contact").
+  const PHONE_LABEL_REGEX = /\b(phone|mobile|cell)\b/i;
+  const EXCLUDE_LABEL_REGEX = /\bfax\b|\bextension\b|\bext\.?\b/i;
+  const MAX_LABEL_LENGTH = 40;
+
+  function looksLikePhoneNumber(text) {
+    if (!text) return false;
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === '\u00A0') return false;
+    const digitCount = (trimmed.match(/\d/g) || []).length;
+    return digitCount >= 7 && PHONE_REGEX.test(trimmed);
+  }
+
+  function isPhoneLabel(labelText) {
+    if (!labelText) return false;
+    const t = labelText.trim();
+    if (!t) return false;
+    if (EXCLUDE_LABEL_REGEX.test(t)) return false;
+    return PHONE_LABEL_REGEX.test(t);
+  }
+
+  function normalizeForTel(raw) {
+    let num = raw.trim();
+    // strip everything except leading + and digits
+    num = num.replace(/(?!^\+)[^\d]/g, '');
+    if (!num.startsWith('+')) {
+      if (CONFIG.defaultCountryCode) {
+        num = CONFIG.defaultCountryCode + num.replace(/^0+/, '');
+      } else {
+        num = '+' + num;
+      }
+    }
+    return num;
+  }
+
+  // Classic (and embedded Visualforce/Lightning panels) render field
+  // label/value pairs in all sorts of markup: <td class="labelCol">,
+  // <div class="field-label">, plain <span> grids, etc. Rather than
+  // depending on specific class names (fragile across orgs/custom pages),
+  // we match on the *label text itself* and then locate its paired value
+  // structurally.
+  function findPhoneElements(root) {
+    const results = [];
+    const seen = new Set();
+
+    function add(el) {
+      if (el && !el.hasAttribute(PROCESSED_ATTR) && !seen.has(el)) {
+        seen.add(el);
+        results.push(el);
+      }
+    }
+
+    function inOwnUi(el) {
+      return !!(el.closest && (el.closest('#sftc-overlay') || el.closest('.' + ICON_CLASS)));
+    }
+
+    // 1) Orgs with Open CTI / softphone / click-to-dial enabled render
+    //    phone fields as <a href="tel:...">.
+    root.querySelectorAll('a[href^="tel:"]').forEach((el) => {
+      if (!inOwnUi(el)) add(el);
+    });
+
+    // 2) Generic label -> value pairing. A "label" is a leaf element
+    //    (no element children, just text) whose own text matches a phone
+    //    label. We climb through single-child wrapper elements to find the
+    //    row/cell this label actually occupies, then take the next
+    //    non-empty sibling as the value.
+    const labelCandidates = root.querySelectorAll('td, th, div, span, label, dt, strong, b, p');
+    labelCandidates.forEach((labelEl) => {
+      if (inOwnUi(labelEl)) return;
+      if (labelEl.children.length > 0) return; // leaf elements only
+      const text = labelEl.textContent.trim();
+      if (!text || text.length > MAX_LABEL_LENGTH) return;
+      if (!isPhoneLabel(text)) return;
+
+      if (CONFIG.DEBUG) console.log('[sftc] label match:', JSON.stringify(text), labelEl);
+
+      const valueEl = findValueSibling(labelEl);
+      if (!valueEl || inOwnUi(valueEl)) {
+        if (CONFIG.DEBUG) console.log('[sftc]   -> no value sibling found for', JSON.stringify(text));
+        return;
+      }
+
+      const innerLink = valueEl.querySelector && valueEl.querySelector('a[href^="tel:"]');
+      if (innerLink) {
+        if (CONFIG.DEBUG) console.log('[sftc]   -> found tel: link inside value', innerLink);
+        add(innerLink);
+        return;
+      }
+      if (looksLikePhoneNumber(valueEl.textContent)) {
+        if (CONFIG.DEBUG) console.log('[sftc]   -> value matched phone shape:', JSON.stringify(valueEl.textContent), valueEl);
+        add(valueEl);
+      } else if (CONFIG.DEBUG) {
+        console.log('[sftc]   -> value found but did not look like a phone number:', JSON.stringify(valueEl.textContent), valueEl);
+      }
+    });
+
+    // 3) List views / related lists: <th>Phone</th> column header, then
+    //    matching <td> in each row by column index.
+    root.querySelectorAll('table').forEach((table) => {
+      const headerRow = table.querySelector('thead tr, tr.headerRow');
+      if (!headerRow) return;
+      const headerCells = Array.from(headerRow.children);
+      const phoneColIndexes = [];
+      headerCells.forEach((th, idx) => {
+        if (isPhoneLabel(th.textContent)) phoneColIndexes.push(idx);
+      });
+      if (phoneColIndexes.length === 0) return;
+
+      const bodyRows = table.querySelectorAll('tbody tr, tr.dataRow');
+      bodyRows.forEach((row) => {
+        const cells = Array.from(row.children);
+        phoneColIndexes.forEach((idx) => {
+          const cell = cells[idx];
+          if (!cell || inOwnUi(cell)) return;
+          const innerLink = cell.querySelector('a[href^="tel:"]');
+          if (innerLink) {
+            add(innerLink);
+            return;
+          }
+          if (looksLikePhoneNumber(cell.textContent)) add(cell);
+        });
+      });
+    });
+
+    return results;
+  }
+
+  // Climb through wrapper elements that exist purely to hold this one
+  // label (parent has exactly one child), to find the element that
+  // actually occupies a "cell" position in the row/grid.
+  function findLabelCellNode(el) {
+    let node = el;
+    while (
+      node.parentElement &&
+      node.parentElement !== document.body &&
+      node.parentElement.children.length === 1
+    ) {
+      node = node.parentElement;
+    }
+    return node;
+  }
+
+  function findValueSibling(labelEl) {
+    const cellNode = findLabelCellNode(labelEl);
+    let sib = cellNode.nextElementSibling;
+    while (sib && !sib.textContent.trim()) {
+      sib = sib.nextElementSibling;
+    }
+    return sib;
+  }
+
+  function extractNumberFromElement(el) {
+    if (el.tagName === 'A' && el.getAttribute('href') && el.getAttribute('href').toLowerCase().startsWith('tel:')) {
+      const href = el.getAttribute('href');
+      return decodeURIComponent(href.replace(/^tel:/i, ''));
+    }
+    return el.textContent.trim();
+  }
+
+  // Salesforce often pads value cells to a fixed column width far wider
+  // than the text they contain (e.g. a 370px-wide cell holding a 14-char
+  // number). Measuring the cell's own bounding box for icon placement puts
+  // the icon way past the visible text — sometimes past the edge of the
+  // frame entirely. Measuring a Range around the actual text content gives
+  // the real rendered extent of the text instead.
+  function getTextRect(el) {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const rects = range.getClientRects();
+      if (rects.length > 0) {
+        return rects[rects.length - 1];
+      }
+    } catch (e) {
+      // fall through to element rect
+    }
+    return el.getBoundingClientRect();
+  }
+
+  function injectIcon(el) {
+    el.setAttribute(PROCESSED_ATTR, 'true');
+
+    const number = extractNumberFromElement(el);
+    // Loosen the shape check here vs. detection time: label-matched <td>
+    // cells were already confirmed by looksLikePhoneNumber before being
+    // added, tel: links may include separators our regex didn't fully
+    // anticipate. Just make sure we ended up with *some* digits.
+    if ((number.match(/\d/g) || []).length < 7) return;
+
+    if (CONFIG.DEBUG) console.log('[sftc] injecting icon for number:', number, el, 'in frame:', window.location.href, 'top frame?', window === window.top);
+
+    const icon = document.createElement('span');
+    icon.className = ICON_CLASS + (CONFIG.DEBUG ? ' sftc-debug' : '');
+    icon.title = CONFIG.iconTitle;
+    icon.textContent = CONFIG.DEBUG ? 'CALL: ' + number : PHONE_ICON_GLYPH;
+    icon.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openCallModal(number);
+    });
+
+    // Anchored to <body> with document-coordinate math, rather than
+    // appended inside the value cell with CSS positioning relative to it.
+    // "position: relative" on a <td> is a known unreliable containing
+    // block for absolutely-positioned children across browsers and
+    // Salesforce's own CSS overrides — it produced icons landing at the
+    // wrong offset (overlapping mid-text) rather than after the number.
+    // Anchoring to body and computing pixel coordinates directly sidesteps
+    // that entirely.
+    document.body.appendChild(icon);
+
+    const positionIcon = () => {
+      // Measure BEFORE the icon is considered part of any range (it never
+      // is here, since it's a sibling of el's subtree, not a child of el)
+      // — this keeps the text measurement uncontaminated.
+      const textRect = getTextRect(el);
+      icon.style.top = textRect.top + window.scrollY + textRect.height / 2 - 9 + 'px';
+      let left = textRect.right + window.scrollX + 6;
+      // Clamp so the icon can't render past the frame's own visible width
+      // (Salesforce panels are often exactly viewport-width with no
+      // horizontal scroll, so anything past this edge is invisible).
+      const maxLeft = document.documentElement.clientWidth - 26;
+      if (left > maxLeft) left = maxLeft;
+      icon.style.left = left + 'px';
+      if (CONFIG.DEBUG) {
+        console.log('[sftc] icon placed at', icon.style.top, icon.style.left, 'text rect:', textRect, 'frame size:', window.innerWidth, window.innerHeight);
+      }
+    };
+    positionIcon();
+    // Re-position on scroll/resize in case the panel scrolls or reflows.
+    window.addEventListener('scroll', positionIcon, true);
+    window.addEventListener('resize', positionIcon);
+
+    if (CONFIG.DEBUG && !window.__sftcAlerted) {
+      // Ultimate diagnostic, kept behind DEBUG: alert() shows a native
+      // dialog at the browser level regardless of whether this frame is
+      // currently the visible Console tab or a hidden background one.
+      window.__sftcAlerted = true;
+      alert('[sftc DEBUG] Found number ' + number + ' in frame: ' + window.location.href + (window === window.top ? ' (TOP frame)' : ' (IFRAME)'));
+    }
+  }
+
+  function scanForPhoneNumbers() {
+    const candidates = findPhoneElements(document);
+    if (CONFIG.DEBUG && candidates.length > 0) {
+      console.log('[sftc] scan found', candidates.length, 'new candidate(s)');
+    }
+    candidates.forEach(injectIcon);
+    scanTextNodesForSignaturePhones(document);
+  }
+
+  /* ----------------------------------------------------------------
+   * EMAIL / FREE-TEXT SIGNATURE SCANNING
+   *
+   * Phone numbers also show up inline in free text — email signatures,
+   * case comments, chatter posts — like "Mob. 937.260.9423" or
+   * "Mob.: 9818399083". These aren't in a labelled table cell, so the
+   * label/value pairing above doesn't apply. Instead we look for a
+   * recognizable label word directly followed by a number, directly in
+   * the text itself. Requiring the label is what keeps this from matching
+   * unrelated numbers in the same text (GST numbers, addresses, order
+   * numbers, zip codes, etc.).
+   * ---------------------------------------------------------------- */
+
+  const SIGNATURE_PHONE_REGEX =
+    /\b(?:Mob(?:ile)?|Phone|Tel(?:ephone)?|Cell|Ph|Contact(?:\s*(?:No\.?|Number))?)[\s:.]*([+]?[0-9][0-9()\-.\s]{5,18}[0-9)])/gi;
+
+  function scanTextNodesForSignaturePhones(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        const tag = parent.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA' || tag === 'INPUT') {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (
+          parent.closest &&
+          (parent.closest('#sftc-overlay') || parent.closest('.' + ICON_CLASS) || parent.closest('.sftc-sig-number'))
+        ) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        // Quick pre-filter: skip nodes with no digits at all before running the full regex.
+        if (!node.nodeValue || !/\d/.test(node.nodeValue)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+
+    const textNodes = [];
+    let n;
+    while ((n = walker.nextNode())) textNodes.push(n);
+
+    textNodes.forEach((node) => {
+      const text = node.nodeValue;
+      SIGNATURE_PHONE_REGEX.lastIndex = 0;
+      const matches = [];
+      let m;
+      while ((m = SIGNATURE_PHONE_REGEX.exec(text))) {
+        const numberText = m[1];
+        if (!looksLikePhoneNumber(numberText)) continue;
+        const fullMatch = m[0];
+        const numOffsetInFull = fullMatch.lastIndexOf(numberText);
+        const start = m.index + numOffsetInFull;
+        const end = start + numberText.length;
+        matches.push({ start, end, numberText });
+      }
+      if (matches.length === 0) return;
+
+      // Process in reverse so earlier offsets in this node stay valid as
+      // we split it up.
+      matches
+        .reverse()
+        .forEach(({ start, end, numberText }) => wrapSignatureNumber(node, start, end, numberText));
+    });
+  }
+
+  function wrapSignatureNumber(textNode, start, end, numberText) {
+    // Split the text node into [before][number][after], then wrap the
+    // number portion and insert the icon right after it — since this
+    // becomes a real part of the text flow, the browser positions it
+    // correctly with no coordinate math needed.
+    const afterStart = textNode.splitText(start); // textNode now ends at `start`; afterStart begins there
+    const rest = afterStart.splitText(end - start); // afterStart now holds exactly the number substring
+
+    const wrapper = document.createElement('span');
+    wrapper.className = 'sftc-sig-number';
+    afterStart.parentNode.insertBefore(wrapper, afterStart);
+    wrapper.appendChild(afterStart);
+
+    const icon = document.createElement('span');
+    icon.className = ICON_CLASS + ' sftc-inline-icon';
+    icon.title = CONFIG.iconTitle;
+    icon.textContent = PHONE_ICON_GLYPH;
+    icon.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openCallModal(numberText);
+    });
+    wrapper.parentNode.insertBefore(icon, rest);
+  }
+
+  /* ----------------------------------------------------------------
+   * MODAL
+   * ---------------------------------------------------------------- */
+
+  function closeModal() {
+    const overlay = document.getElementById('sftc-overlay');
+    if (overlay) overlay.remove();
+    document.removeEventListener('keydown', onEscKey);
+  }
+
+  function onEscKey(e) {
+    if (e.key === 'Escape') closeModal();
+  }
+
+  function openCallModal(rawNumber) {
+    closeModal(); // ensure only one instance
+
+    const overlay = document.createElement('div');
+    overlay.id = 'sftc-overlay';
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeModal();
+    });
+
+    overlay.innerHTML = `
+      <div id="sftc-modal" role="dialog" aria-modal="true" aria-labelledby="sftc-title">
+        <h3 id="sftc-title">Call Contact</h3>
+        <label for="sftc-number-input">Phone number</label>
+        <input id="sftc-number-input" type="text" value="${rawNumber.replace(/"/g, '&quot;')}" />
+        <div id="sftc-error">Please enter a valid phone number.</div>
+        <div id="sftc-btn-row">
+          <button id="sftc-cancel-btn" type="button">Cancel</button>
+          <button id="sftc-call-btn" type="button">Call</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onEscKey);
+
+    const input = document.getElementById('sftc-number-input');
+    input.focus();
+    input.select();
+
+    document.getElementById('sftc-cancel-btn').addEventListener('click', closeModal);
+
+    document.getElementById('sftc-call-btn').addEventListener('click', () => {
+      const value = input.value.trim();
+      const errorEl = document.getElementById('sftc-error');
+      if (!looksLikePhoneNumber(value)) {
+        errorEl.style.display = 'block';
+        return;
+      }
+      errorEl.style.display = 'none';
+      dialViaTeams(value);
+      closeModal();
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('sftc-call-btn').click();
+    });
+  }
+
+  /* ----------------------------------------------------------------
+   * TEAMS DIALING
+   *
+   * We use the Teams *web* deep link rather than the raw msteams: URI.
+   * When Teams desktop is installed, the OS/browser protocol handler
+   * registered by Teams intercepts this URL and opens the native app on
+   * both macOS and Windows, so no OS branching is required. If Teams
+   * isn't installed, the link falls back to teams.microsoft.com in browser.
+   * ---------------------------------------------------------------- */
+
+  function dialViaTeams(rawNumber) {
+    const e164 = normalizeForTel(rawNumber);
+    // "4:" prefix tells Teams this is a PSTN phone number (not a user UPN)
+    const teamsUrl =
+      'https://teams.microsoft.com/l/call/0/0?users=4:' +
+      encodeURIComponent(e164) +
+      '&withVideo=false';
+
+    // Opening in a new tab lets the OS protocol handler take over cleanly
+    // on both Mac and Windows without navigating away from Salesforce.
+    window.open(teamsUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  /* ----------------------------------------------------------------
+   * OBSERVE SALESFORCE'S SPA DOM (Lightning re-renders constantly)
+   * ---------------------------------------------------------------- */
+
+  const observer = new MutationObserver(() => {
+    scanForPhoneNumbers();
+  });
+
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  // Safety-net periodic scan in case some updates dodge the observer
+  // (e.g. attribute-only href changes on tel: links after component reuse).
+  setInterval(scanForPhoneNumbers, CONFIG.scanIntervalMs);
+
+  // Initial scan
+  scanForPhoneNumbers();
 })();
